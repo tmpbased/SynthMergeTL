@@ -1,0 +1,8 @@
+{
+  "Nickname": "MergeTL",
+  "Visibility": "Visible",
+  "OneLineDescription": "Merge conflicts for translation patches",
+  "LongDescription": "",
+  "PreferredAutoVersioning": "Default",
+  "RequiredMods": []
+}
