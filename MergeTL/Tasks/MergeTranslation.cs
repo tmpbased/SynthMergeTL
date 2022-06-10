@@ -18,6 +18,8 @@ using System.Threading;
 using Mutagen.Bethesda.Strings.DI;
 using System.Reflection;
 using Mutagen.Bethesda.Environments;
+using System.Linq;
+using System.Text;
 
 namespace MergeTL.Tasks
 {
@@ -54,7 +56,7 @@ namespace MergeTL.Tasks
                 Console.Write($" {key}");
             }
             Console.WriteLine($" ({loadOrder.Count})");
-            TranslationContext translationContext = new(state, settings, linkCache, translatedLoadOrder.ListedOrder.ToImmutableLinkCache());
+            TranslationContext translationContext = new(state, settings, loadOrder, linkCache, translatedLoadOrder.ListedOrder.ToImmutableLinkCache());
             // places
             if (settings.Translation.Records.Cell)
             {
@@ -413,20 +415,24 @@ namespace MergeTL.Tasks
         {
             private readonly IPatcherState<ISkyrimMod, ISkyrimModGetter> state;
             private readonly Configuration settings;
-            private readonly ILinkCache translatedLinkCache;
+            private readonly ILoadOrder<IModListing<ISkyrimModGetter>> loadOrder;
             private readonly ILinkCache linkCache;
+            private readonly ILinkCache translatedLinkCache;
             private readonly Dictionary<ModKey, IModStringsLookup> stringsLookups = new();
+            private readonly Dictionary<ModKey, ILinkCache> modLinkCaches = new();
 
             public TranslationContext(
                 IPatcherState<ISkyrimMod, ISkyrimModGetter> state,
                 Configuration settings,
+                ILoadOrder<IModListing<ISkyrimModGetter>> loadOrder,
                 ILinkCache linkCache,
                 ILinkCache translatedLinkCache)
             {
                 this.state = state;
                 this.settings = settings;
-                this.translatedLinkCache = translatedLinkCache;
+                this.loadOrder = loadOrder;
                 this.linkCache = linkCache;
+                this.translatedLinkCache = translatedLinkCache;
             }
 
             public W GetOrAddAsOverride<R, W>(IModContext<ISkyrimMod, ISkyrimModGetter, W, R> modContext)
@@ -456,11 +462,59 @@ namespace MergeTL.Tasks
                 }
                 if (settings.Translation.Plugins.Contains(originalContext.ModKey))
                 {
-                    translatedLinkCache.TryResolveSimpleContext(context.Record.FormKey, out IModContext<R>? originalContext2, ResolveTarget.Winner);
-                    if (originalContext2 != null)
+                    translatedLinkCache.TryResolveSimpleContext(context.Record.FormKey, out originalContext, ResolveTarget.Winner);
+                    var loopContext = originalContext;
+                    while (loopContext is not null && settings.Translation.Plugins.Contains(loopContext.ModKey) && GetModStringsLookup(loopContext.ModKey).Empty)
                     {
-                        return (originalContext2, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
-                            value.TryLookup(GetModStringsLookup(originalContext2.ModKey), language, out str));
+                        if (!modLinkCaches.TryGetValue(loopContext.ModKey, out ILinkCache? modLinkCache))
+                        {
+                            if (loadOrder.TryGetIfEnabledAndExists(loopContext.ModKey, out var mod))
+                            {
+                                var masters = new List<ModKey>();
+                                foreach (var masterMod in mod.MasterReferences)
+                                {
+                                    masters.Add(masterMod.Master);
+                                }
+                                var modLoadOrder = LoadOrder.Import<ISkyrimModGetter>(state.DataFolderPath, masters, GameRelease.SkyrimSE);
+                                modLinkCache = modLoadOrder.ListedOrder.ToImmutableLinkCache();
+                                modLinkCaches.Add(loopContext.ModKey, modLinkCache);
+                            }
+                        }
+                        if (modLinkCache is null)
+                        {
+                            loopContext = null;
+                        }
+                        else
+                        {
+                            modLinkCache.TryResolveSimpleContext(context.Record.FormKey, out loopContext, ResolveTarget.Winner);
+                        }
+                    }
+                    if (loopContext is null)
+                    {
+                        return (null, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
+                        {
+                            str = null;
+                            return false;
+                        }
+                        );
+                    }
+                    else if (GetModStringsLookup(loopContext.ModKey).Empty)
+                    {
+                        return (loopContext, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
+                            value.TryLookup(language, out str));
+                    }
+                    else
+                    {
+                        return (loopContext, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
+                        {
+                            if (value.TryLookup(GetModStringsLookup(loopContext.ModKey), language, out str))
+                            {
+                                return true;
+                            }
+                            str = null;
+                            return false;
+                        }
+                        );
                     }
                 }
                 return (originalContext, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) => value.TryLookup(language, out str));
@@ -547,7 +601,11 @@ namespace MergeTL.Tasks
                     {
                         if (this.str.TryLookup(language, out str))
                         {
-                            str = Utf8To1252(str);
+                            // if UsingLocalizationDictionary (a.k.a. STRINGS), de-encode to 1252 :-)
+                            if ((this.str as TranslatedString)?.StringsKey is not null)
+                            {
+                                str = Utf8To1252(str);
+                            }
                             return true;
                         }
                         return false;
@@ -571,7 +629,7 @@ namespace MergeTL.Tasks
                         }
                         if (lookup.TryLookup((StringsSource)stringsSource, language, (uint)stringsKey, out str))
                         {
-                            str = Utf8To1252(str);
+                            // str = Utf8To1252(str);
                             return true;
                         }
                         return false;
@@ -956,6 +1014,8 @@ namespace MergeTL.Tasks
 
     internal interface IModStringsLookup
     {
+        bool Empty { get; }
+
         bool TryLookup(StringsSource source, Language language, uint key, [MaybeNullWhen(false)] out string str);
     }
 
