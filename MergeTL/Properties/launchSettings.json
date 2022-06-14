@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "MergeTL": {
-      "commandName": "Project",
-      "commandLineArgs": "run-patcher \r\n--DataFolderPath \"D:\\games\\steam\\steamapps\\common\\Skyrim Special Edition\\Data\"\r\n--ExtraDataFolder \"D:\\games\\steam\\steamapps\\common\\Skyrim Special Edition\\Data\\tools\\Synthesis\\Data\\Skyrim Special Edition\\MergeTL\"\r\n--DefaultDataFolderPath \"D:\\games\\steam\\steamapps\\common\\Skyrim Special Edition\\Data\\tools\\Synthesis\\my\\MergeTL\\MergeTL\\Data\"\r\n--GameRelease SkyrimSE --ModKey LeveledListMerged.esp \r\n--LoadOrderFilePath C:\\Users\\shifter\\AppData\\Local\\Temp\\Synthesis/n1nyutvt.z5x\\Workspace\\LeveledListMerged\\Plugins.txt \r\n--LoadOrderIncludesCreationClub \r\n--OutputPath \"C:\\Users\\shifter\\AppData\\Local\\Temp\\Synthesis/n1nyutvt.z5x\\Workspace\\LeveledListMerged\\1 - MergeTL\\LeveledListMerged.esp\"\r\n--PatcherName MergeTL"
-    }
-  }
-}
