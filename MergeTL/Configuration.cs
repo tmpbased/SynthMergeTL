@@ -10,10 +10,25 @@ namespace MergeTL
         public Configuration_Translation Translation { get; set; } = new Configuration_Translation();
     }
 
+    public enum Encoding
+    {
+        none,
+        _932,
+        _1250,
+        _1251,
+        _1252,
+        _1253,
+        _1254,
+        _1256,
+        _utf8,
+    }
+
     public class Configuration_Translation
     {
         [Tooltip("Solve merge conflicts between translated strings and other plugins.")]
         public bool Merge { get; set; } = true;
+
+        public bool Verbose { get; set; } = true;
 
         [Tooltip("Forcefully revert string-related changes made in plugins.")]
         public bool ForceOverride { get; set; } = false;
@@ -24,16 +39,25 @@ namespace MergeTL
 
         public List<ModKey> BlacklistPlugins { get; set; } = new();
 
+        [Tooltip("Any plugin whose language differs should be either blacklisted or marked as translated.")]
+        public Language OriginalLanguage { get; set; } = Language.English;
+
         /* TODO
         [Tooltip("Don't overwrite names / texts for mods that declare corresponding bash tags.")]
         public bool UseBashTags { get; set; } = false;
 
         [Tooltip("Paths to LOOT taglist (included with WB, used only if no LOOT masterlist could be found), LOOT masterlist, LOOT userlist.")]
         public List<string> BashTagLists { get; set; } = new();
+
+        [Tooltip("Copy ITMs that aren't translated (e.g. for further translation)")]
+        public bool CopyITM { get; set; } = false;
         */
 
         [Tooltip("Language used for translation.")]
         public Language Language { get; set; } = Language.English;
+
+        [Tooltip("Encoding used for translation.")]
+        public Encoding Encoding { get; set; } = Encoding._1252;
 
         [Tooltip("Translated plugins (both STRINGS and ESP/L-patches).")]
         public List<ModKey> Plugins { get; set; } = new()

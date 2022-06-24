@@ -25,7 +25,6 @@ namespace MergeTL.Tasks
 {
     public class MergeTranslation
     {
-        private const Language OriginalLanguage = Utils.OriginalLanguage;
         private readonly Configuration settings;
 
         public MergeTranslation(Configuration settings)
@@ -406,6 +405,67 @@ namespace MergeTL.Tasks
                         CreateScriptStringPropertyDataLens(questContext, it => it.VirtualMachineAdapter));
                 }
             }
+            Statistics statistics = translationContext.Statistics;
+            List<KeyValuePair<ModKey, int>> untranslatedList = statistics.Untranslated.ToList();
+            untranslatedList.Sort((kv1, kv2) => kv2.Value.CompareTo(kv1.Value));
+            List<KeyValuePair<ModKey, int>> conflictedList = statistics.Conflicted.ToList();
+            conflictedList.Sort((kv1, kv2) => kv2.Value.CompareTo(kv1.Value));
+            Console.WriteLine(@$"Translated (winning overrides are already from translated plugins, nothing to do): {statistics.TranslatedCount}.
+Untranslated (no corresponding overrides in translated plugins): {statistics.UntranslatedCount} ({string.Join(", ", untranslatedList.Select(kv => $"{kv.Key} - {kv.Value}"))}).
+Overridden (successfully reverted to the text from translated plugins): {statistics.OverriddenCount}.
+Conflicted (translation can't be used, since the text was changed w.r.t. translated plugins' masters): {statistics.ConflictedCount} ({string.Join(", ", conflictedList.Select(kv => $"{kv.Key} - {kv.Value}"))})");
+        }
+
+        private class Statistics
+        {
+            public int TranslatedCount { get; private set; }
+            public int OverriddenCount { get; private set; }
+            public int ConflictedCount { get; private set; }
+            public int UntranslatedCount { get; private set; }
+
+            private readonly Dictionary<ModKey, int> modConflicted = new();
+            private readonly Dictionary<ModKey, int> modUntranslated = new();
+
+            public IReadOnlyDictionary<ModKey, int> Conflicted { get => modConflicted; }
+            public IReadOnlyDictionary<ModKey, int> Untranslated { get => modUntranslated; }
+
+            public void AddTranslated(int count)
+            {
+                TranslatedCount += count;
+            }
+
+            public void AddOverridden()
+            {
+                OverriddenCount++;
+            }
+
+            public void AddConflicted(ModKey key)
+            {
+                ConflictedCount++;
+                if (modConflicted.ContainsKey(key))
+                    modConflicted[key] = modConflicted[key] + 1;
+                else
+                    modConflicted.Add(key, 1);
+            }
+
+            public void AddUntranslated(ModKey key)
+            {
+                UntranslatedCount++;
+                if (modUntranslated.ContainsKey(key))
+                    modUntranslated[key] = modUntranslated[key] + 1;
+                else
+                    modUntranslated.Add(key, 1);
+            }
+
+            public void AddUntranslated(ModKey key, int count)
+            {
+                if (count == 0) return;
+                UntranslatedCount += count;
+                if (modUntranslated.ContainsKey(key))
+                    modUntranslated[key] = modUntranslated[key] + count;
+                else
+                    modUntranslated.Add(key, count);
+            }
         }
 
         private delegate ITranslatedStringGetter? ValueGetter<T>(T majorRecordGetter) where T : IMajorRecordGetter;
@@ -420,6 +480,8 @@ namespace MergeTL.Tasks
             private readonly ILinkCache translatedLinkCache;
             private readonly Dictionary<ModKey, IModStringsLookup> stringsLookups = new();
             private readonly Dictionary<ModKey, ILinkCache> modLinkCaches = new();
+
+            public Statistics Statistics { get; } = new();
 
             public TranslationContext(
                 IPatcherState<ISkyrimMod, ISkyrimModGetter> state,
@@ -583,28 +645,30 @@ namespace MergeTL.Tasks
                 public class Translated : Value
                 {
                     private readonly ITranslatedStringGetter str;
+                    private readonly Configuration settings;
 
-                    public Translated(ITranslatedStringGetter str)
+                    public Translated(ITranslatedStringGetter str, Configuration settings)
                     {
                         this.str = str;
+                        this.settings = settings;
                     }
 
-                    // TODO probably shouldn't be hardcoded...
-                    private static string Utf8To1252(string str)
+                    private string FromUtf8(string str)
                     {
+                        if (settings.Translation.Encoding == Encoding.none) return str;
                         var arraySpan = new Span<byte>(new byte[MutagenEncodingProvider._utf8.GetByteCount(str.AsSpan())]);
                         MutagenEncodingProvider._utf8.GetBytes(str.AsSpan(), arraySpan);
-                        return MutagenEncodingProvider._1252.GetString(arraySpan);
+                        return Utils.GetEncoding(settings.Translation.Encoding).GetString(arraySpan);
                     }
 
                     public override bool TryLookup(Language language, [MaybeNullWhen(false)] out string str)
                     {
                         if (this.str.TryLookup(language, out str))
                         {
-                            // if UsingLocalizationDictionary (a.k.a. STRINGS), de-encode to 1252 :-)
+                            // if UsingLocalizationDictionary (a.k.a. STRINGS), de-encode to translation's encoding :-)
                             if ((this.str as TranslatedString)?.StringsKey is not null)
                             {
-                                str = Utf8To1252(str);
+                                str = FromUtf8(str);
                             }
                             return true;
                         }
@@ -629,7 +693,7 @@ namespace MergeTL.Tasks
                         }
                         if (lookup.TryLookup((StringsSource)stringsSource, language, (uint)stringsKey, out str))
                         {
-                            // str = Utf8To1252(str);
+                            // str = FromUtf8(str);
                             return true;
                         }
                         return false;
@@ -669,7 +733,7 @@ namespace MergeTL.Tasks
                 ITranslatedStringGetter? value = valueGetter(majorRecordGetter);
                 if (value != null)
                 {
-                    yield return (Utils.Key(majorRecordGetter, name), new Value.Translated(value));
+                    yield return (Utils.Key(majorRecordGetter, name), new Value.Translated(value, parent.settings));
                 }
             }
 
@@ -757,7 +821,7 @@ namespace MergeTL.Tasks
                 foreach (IBodyPartGetter bodyPartGetter in majorRecordGetter.Parts)
                 {
                     string key = Utils.Key(majorRecordGetter, bodyPartGetter);
-                    yield return (key, new Value.Translated(bodyPartGetter.Name));
+                    yield return (key, new Value.Translated(bodyPartGetter.Name, parent.settings));
                 }
             }
 
@@ -792,7 +856,7 @@ namespace MergeTL.Tasks
                     string key = Utils.Key(majorRecordGetter, i++);
                     if (messageButtonGetter.Text is not null)
                     {
-                        yield return (key, new Value.Translated(messageButtonGetter.Text));
+                        yield return (key, new Value.Translated(messageButtonGetter.Text, parent.settings));
                     }
                 }
             }
@@ -840,7 +904,7 @@ namespace MergeTL.Tasks
                         string key = Utils.Key(majorRecordGetter, questStageGetter, i++);
                         if (questLogEntryGetter.Entry is not null)
                         {
-                            yield return (key, new Value.Translated(questLogEntryGetter.Entry));
+                            yield return (key, new Value.Translated(questLogEntryGetter.Entry, parent.settings));
                         }
                     }
                 }
@@ -885,7 +949,7 @@ namespace MergeTL.Tasks
                 foreach (IDialogResponseGetter dialogResponseGetter in majorRecordGetter.Responses)
                 {
                     string key = Utils.Key(majorRecordGetter, dialogResponseGetter);
-                    yield return (key, new Value.Translated(dialogResponseGetter.Text));
+                    yield return (key, new Value.Translated(dialogResponseGetter.Text, parent.settings));
                 }
             }
 
@@ -899,6 +963,15 @@ namespace MergeTL.Tasks
             }
         }
 
+        private string ToUtf8(string str)
+        {
+            if (settings.Translation.Encoding == Encoding.none) return str;
+            IMutagenEncoding encoding = Utils.GetEncoding(settings.Translation.Encoding);
+            var arraySpan = new Span<byte>(new byte[encoding.GetByteCount(str.AsSpan())]);
+            encoding.GetBytes(str.AsSpan(), arraySpan);
+            return MutagenEncodingProvider._utf8.GetString(arraySpan);
+        }
+
         private void Merge<R, W>(
                 TranslationContext translationContext,
                 IModContext<ISkyrimMod, ISkyrimModGetter, W, R> modContext,
@@ -906,57 +979,102 @@ namespace MergeTL.Tasks
                 where R : class, IMajorRecordGetter
                 where W : class, R, IMajorRecord
         {
+            if (settings.Translation.Plugins.Contains(modContext.ModKey))
+            {
+                translationContext.Statistics.AddTranslated(lenses.Select(lens => lens.ReadKeyValue(modContext.Record)
+                    .Where(value => value.Item2 != null && value.Item2.TryLookup(settings.Translation.Language, out string? translatedValue)
+                        && Regex.IsMatch(translatedValue, @"\w"))
+                    .Count()).Sum());
+                return;
+            }
             var translatedContext = translationContext.GetTranslatedContext(modContext.Record);
-            if (translatedContext is null) return;
+            if (translatedContext is null)
+            {
+                translationContext.Statistics.AddUntranslated(modContext.ModKey, lenses.Select(lens => lens.ReadKeyValue(modContext.Record)
+                    .Where(value => value.Item2 != null && value.Item2.TryLookup(settings.Translation.Language, out string? translatedValue)
+                        && Regex.IsMatch(translatedValue, @"\w"))
+                    .Count()).Sum());
+                return;
+            }
             Dictionary<string, string> translatedValues = new();
             foreach (var lens in lenses)
             {
                 foreach (var (key, value) in lens.ReadKeyValue(translatedContext.Record))
                 {
-                    if (value != null && value.TryLookup(Language.English, out string? translatedValue) && Regex.IsMatch(translatedValue, @"\w"))
+                    if (value != null && value.TryLookup(settings.Translation.Language, out string? translatedValue) && Regex.IsMatch(translatedValue, @"\w"))
                     {
                         translatedValues.Add(key, translatedValue);
                     }
                 }
             }
-            if (translatedValues.Count <= 0) return;
-            Lazy<Dictionary<string, string>> originalValues = settings.Translation.ForceOverride
+            if (translatedValues.Count <= 0)
+            {
+                translationContext.Statistics.AddUntranslated(modContext.ModKey, lenses.Select(lens => lens.ReadKeyValue(modContext.Record)
+                    .Where(value => value.Item2 != null && value.Item2.TryLookup(settings.Translation.Language, out string? translatedValue)
+                            && Regex.IsMatch(translatedValue, @"\w"))
+                    .Count()).Sum());
+                return;
+            }
+            Lazy<Dictionary<string, (ModKey, string)>> originalValues = settings.Translation.ForceOverride
                 ? null!
-                : new(() => GetOriginalValues<R, W>(translationContext, modContext, lenses));
+                : new(() => GetOriginalValues<R, W>(translationContext, modContext, lenses, settings.Translation.OriginalLanguage));
             HashSet<string> replacementValues = new();
             foreach (var lens in lenses)
             {
                 foreach (var (key, value) in lens.ReadKeyValue(modContext.Record))
                 {
+                    value.TryLookup(settings.Translation.Language, out string? modValue);
                     if (!translatedValues.TryGetValue(key, out string? translatedValue))
                     {
+                        if (modValue is not null && Regex.IsMatch(modValue, @"\w"))
+                        {
+                            translationContext.Statistics.AddUntranslated(modContext.ModKey);
+                        }
                         continue;
                     }
-                    value.TryLookup(settings.Translation.Language, out string? modValue);
                     if (!string.Equals(translatedValue, modValue, StringComparison.Ordinal))
                     {
                         if (settings.Translation.ForceOverride)
                         {
-                            Console.WriteLine(@$"{modContext.Record.Type.Name.Substring(1)} {modContext.Record.EditorID}({modContext.Record.FormKey})
-    : {modValue}({modContext.ModKey})->{translatedValue}({translatedContext.ModKey})");
+                            translationContext.Statistics.AddOverridden();
+                            if (settings.Translation.Verbose)
+                            {
+                                Console.WriteLine(@$"{modContext.Record.Type.Name[1..]} {modContext.Record.EditorID}({modContext.Record.FormKey})
+    : {modValue}({modContext.ModKey})->{ToUtf8(translatedValue)}({translatedContext.ModKey})");
+                            }
                             replacementValues.Add(key);
                         }
                         else
                         {
-                            value.TryLookup(OriginalLanguage, out string? modOriginalValue);
-                            originalValues.Value.TryGetValue(key, out string? originalValue);
-                            if (string.Equals(CleanUpOriginalValue(originalValue), CleanUpOriginalValue(modOriginalValue), StringComparison.InvariantCultureIgnoreCase))
+                            value.TryLookup(settings.Translation.OriginalLanguage, out string? modOriginalValue);
+                            originalValues.Value.TryGetValue(key, out (ModKey, string) originalKeyValue);
+                            if (string.Equals(
+                                    CleanUpOriginalValue(originalKeyValue.Item2, settings.Translation.OriginalLanguage),
+                                    CleanUpOriginalValue(modOriginalValue, settings.Translation.OriginalLanguage),
+                                    StringComparison.InvariantCultureIgnoreCase))
                             {
-                                Console.WriteLine(@$"{modContext.Record.Type.Name.Substring(1)} {modContext.Record.EditorID}({modContext.Record.FormKey})
-    : {originalValue}->{modOriginalValue}({modContext.ModKey})
-    =>{modValue}({modContext.ModKey})->{translatedValue}({translatedContext.ModKey})");
-                                replacementValues.Add(key);
+                                // was original text actually translated?
+                                if (!originalKeyValue.Item2.Equals(translatedValue, StringComparison.Ordinal))
+                                {
+                                    translationContext.Statistics.AddOverridden();
+                                    if (settings.Translation.Verbose)
+                                    {
+                                        Console.WriteLine($@"{modContext.Record.Type.Name[1..]} {modContext.Record.EditorID}({modContext.Record.FormKey})
+    : {originalKeyValue.Item2}({originalKeyValue.Item1})->{modOriginalValue}({modContext.ModKey})
+    =>{modValue}({modContext.ModKey})->{ToUtf8(translatedValue)}({translatedContext.ModKey})");
+                                    }
+                                    replacementValues.Add(key);
+                                }
                             }
                             else
                             {
-                                Console.WriteLine(@$"{modContext.Record.Type.Name.Substring(1)} {modContext.Record.EditorID}({modContext.Record.FormKey})
-    : {originalValue}->{modOriginalValue}({modContext.ModKey})
+                                translationContext.Statistics.AddConflicted(modContext.ModKey);
+                                if (settings.Translation.Verbose)
+                                {
+                                    Console.WriteLine(@$"{modContext.Record.Type.Name[1..]} {modContext.Record.EditorID}({modContext.Record.FormKey})
+    : {originalKeyValue.Item2}({originalKeyValue.Item1})->{modOriginalValue}({modContext.ModKey})
     =>{modValue}({modContext.ModKey})");
+                                }
                             }
                         }
                     }
@@ -977,23 +1095,28 @@ namespace MergeTL.Tasks
         }
 
         [return: NotNullIfNotNull("value")]
-        private static string? CleanUpOriginalValue(string? value)
+        private static string? CleanUpOriginalValue(string? value, Language language)
         {
             if (value is null) return value;
-            value = Regex.Replace(value, @"[^\w]an?([^\w]|$)", "$1");
-            value = Regex.Replace(value, @"[^\w]the([^\w]|$)", "$1");
+            if (language == Language.English)
+            {
+                value = Regex.Replace(value, @"[^\w]an?([^\w]|$)", "$1");
+                value = Regex.Replace(value, @"[^\w]the([^\w]|$)", "$1");
+                value = Regex.Replace(value, @"e?s?[`']?e?s([^\w]|$)", "$1");
+            }
             value = Regex.Replace(value, @"[-.:,;!?\s]+", " ");
             return value.ToLower();
         }
 
-        private static Dictionary<string, string> GetOriginalValues<R, W>(
+        private static Dictionary<string, (ModKey, string)> GetOriginalValues<R, W>(
             TranslationContext translationContext,
             IModContext<ISkyrimMod, ISkyrimModGetter, W, R> modContext,
-            Lens<R, W>[] lenses)
+            Lens<R, W>[] lenses,
+            Language language)
                 where R : class, IMajorRecordGetter
                 where W : class, IMajorRecord, R
         {
-            Dictionary<string, string> values = new();
+            Dictionary<string, (ModKey, string)> values = new();
             var (originalContext, originalValueLookup) = translationContext.GetOriginalContext(modContext);
             if (originalContext is not null)
             {
@@ -1001,9 +1124,9 @@ namespace MergeTL.Tasks
                 {
                     foreach (var (key, value) in lens.ReadKeyValue(originalContext.Record))
                     {
-                        if (originalValueLookup(value, OriginalLanguage, out string? originalValue))
+                        if (originalValueLookup(value, language, out string? originalValue))
                         {
-                            values.Add(key, originalValue);
+                            values.Add(key, (originalContext.ModKey, originalValue));
                         }
                     }
                 }

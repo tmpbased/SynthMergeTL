@@ -4,6 +4,7 @@ using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using System.Threading.Tasks;
 using MergeTL.Tasks;
+using System.Runtime.InteropServices;
 
 namespace MergeTL
 {
@@ -19,6 +20,7 @@ namespace MergeTL
                 .SetTypicalOpen(GameRelease.SkyrimSE, "YourPatcher.esp")
                 .Run(args);
         }
+
         public static void RunPatch(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
         {
             if (settings.Value.Translation.Merge)

@@ -1,6 +1,7 @@
 using Mutagen.Bethesda.Plugins.Records;
 using Mutagen.Bethesda.Skyrim;
 using Mutagen.Bethesda.Strings;
+using Mutagen.Bethesda.Strings.DI;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -8,7 +9,29 @@ namespace MergeTL
 {
     public class Utils
     {
-        public const Language OriginalLanguage = Language.English;
+        public static IMutagenEncoding GetEncoding(Encoding encoding)
+        {
+            switch (encoding)
+            {
+                case Encoding._932:
+                    return MutagenEncodingProvider._932;
+                case Encoding._1250:
+                    return MutagenEncodingProvider._1250;
+                case Encoding._1251:
+                    return MutagenEncodingProvider._1251;
+                case Encoding._1252:
+                    return MutagenEncodingProvider._1252;
+                case Encoding._1253:
+                    return MutagenEncodingProvider._1253;
+                case Encoding._1254:
+                    return MutagenEncodingProvider._1254;
+                case Encoding._1256:
+                    return MutagenEncodingProvider._1256;
+                case Encoding._utf8:
+                default:
+                    return MutagenEncodingProvider._utf8;
+            }
+        }
 
         public static string Key(IMajorRecordGetter majorRecordGetter, string name) => $"{majorRecordGetter.FormKey}→{name}";
 
