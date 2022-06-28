@@ -48,9 +48,6 @@ namespace MergeTL
 
         [Tooltip("Paths to LOOT taglist (included with WB, used only if no LOOT masterlist could be found), LOOT masterlist, LOOT userlist.")]
         public List<string> BashTagLists { get; set; } = new();
-
-        [Tooltip("Copy ITMs that aren't translated (e.g. for further translation)")]
-        public bool CopyITM { get; set; } = false;
         */
 
         [Tooltip("Language used for translation.")]
@@ -72,6 +69,11 @@ namespace MergeTL
             "ccQDRSSE001-SurvivalMode.esl",
             "ccBGSSSE037-Curios.esl",
             "ccBGSSSE025-AdvDSGS.esm"
+        };
+
+        [Tooltip("Copy (as override) all winning records from selected plugins (even if they are not changed).")]
+        public List<ModKey> CopyPlugins { get; set; } = new()
+        {
         };
     }
 
@@ -118,6 +120,7 @@ namespace MergeTL
         public bool Key { get; set; } = true;
         public bool MiscItem { get; set; } = true;
         public bool SoulGem { get; set; } = true;
+        public bool Light { get; set; } = true;
 
         // effects
         public bool ObjectEffect { get; set; } = true;
@@ -126,11 +129,13 @@ namespace MergeTL
         public bool Shout { get; set; } = true;
         public bool WordOfPower { get; set; } = true;
         public bool Hazard { get; set; } = true;
+        public bool Explosion { get; set; } = true;
 
         // text
         public bool Dialog { get; set; } = true;
         public bool LoadScreen { get; set; } = true;
         public bool Message { get; set; } = true;
         public bool Quest { get; set; } = true;
+        public bool GameSetting { get; set; } = true;
     }
 }

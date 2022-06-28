@@ -55,7 +55,8 @@ namespace MergeTL.Tasks
                 Console.Write($" {key}");
             }
             Console.WriteLine($" ({loadOrder.Count})");
-            TranslationContext translationContext = new(state, settings, loadOrder, linkCache, translatedLoadOrder.ListedOrder.ToImmutableLinkCache());
+            TranslationContext translationContext = new(state, settings, loadOrder, linkCache,
+                translatedLoadOrder, translatedLoadOrder.ListedOrder.ToImmutableLinkCache());
             // places
             if (settings.Translation.Records.Cell)
             {
@@ -123,7 +124,9 @@ namespace MergeTL.Tasks
                 {
                     Merge(translationContext, perkContext,
                         CreateMajorRecordLens(perkContext, "FULL", it => it.Name, (it, value) => it.Name = value),
-                        CreateMajorRecordLens(perkContext, "DESC", it => it.Description, (it, value) => it.Description = value));
+                        CreateMajorRecordLens(perkContext, "DESC", it => it.Description, (it, value) => it.Description = value),
+                        CreateScriptStringPropertyDataLens(perkContext, it => it.VirtualMachineAdapter),
+                        CreatePerkEffectButtonLabelLens());
                 }
             }
             if (settings.Translation.Records.Race)
@@ -306,6 +309,14 @@ namespace MergeTL.Tasks
                         CreateMajorRecordLens(soulGemContext, "FULL", it => it.Name, (it, value) => it.Name = value));
                 }
             }
+            if (settings.Translation.Records.Light)
+            {
+                foreach (var lightContext in loadOrder.PriorityOrder.Light().WinningContextOverrides())
+                {
+                    Merge(translationContext, lightContext,
+                        CreateMajorRecordLens(lightContext, "FULL", it => it.Name, (it, value) => it.Name = value));
+                }
+            }
             // effects
             if (settings.Translation.Records.ObjectEffect)
             {
@@ -360,6 +371,14 @@ namespace MergeTL.Tasks
                         CreateMajorRecordLens(hazardContext, "FULL", it => it.Name, (it, value) => it.Name = value));
                 }
             }
+            if (settings.Translation.Records.Explosion)
+            {
+                foreach (var explosionContext in loadOrder.PriorityOrder.Explosion().WinningContextOverrides())
+                {
+                    Merge(translationContext, explosionContext,
+                        CreateMajorRecordLens(explosionContext, "FULL", it => it.Name, (it, value) => it.Name = value));
+                }
+            }
             // text
             if (settings.Translation.Records.Dialog)
             {
@@ -402,7 +421,19 @@ namespace MergeTL.Tasks
                         CreateMajorRecordLens(questContext, "FULL", it => it.Name, (it, value) => it.Name = value),
                         CreateMajorRecordLens(questContext, "DESC", it => it.Description, (it, value) => it.Description = value),
                         CreateQuestStageLogEntryLens(),
+                        CreateQuestObjectiveTextLens(),
                         CreateScriptStringPropertyDataLens(questContext, it => it.VirtualMachineAdapter));
+                }
+            }
+            if (settings.Translation.Records.GameSetting)
+            {
+                foreach (var gameSettingContext in loadOrder.PriorityOrder.GameSetting().WinningContextOverrides())
+                {
+                    if (gameSettingContext.Record is IGameSettingStringGetter gameSettingStringGetter)
+                        Merge(translationContext, gameSettingContext,
+                            CreateMajorRecordLens(gameSettingContext, "FULL",
+                                it => (it as IGameSettingStringGetter)?.Data,
+                                (it, value) => { if (it is IGameSettingString its) its.Data = value; }));
                 }
             }
             Statistics statistics = translationContext.Statistics;
@@ -477,6 +508,7 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
             private readonly Configuration settings;
             private readonly ILoadOrder<IModListing<ISkyrimModGetter>> loadOrder;
             private readonly ILinkCache linkCache;
+            private readonly ILoadOrder<IModListing<ISkyrimModGetter>> translatedLoadOrder;
             private readonly ILinkCache translatedLinkCache;
             private readonly Dictionary<ModKey, IModStringsLookup> stringsLookups = new();
             private readonly Dictionary<ModKey, ILinkCache> modLinkCaches = new();
@@ -488,12 +520,14 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                 Configuration settings,
                 ILoadOrder<IModListing<ISkyrimModGetter>> loadOrder,
                 ILinkCache linkCache,
+                ILoadOrder<IModListing<ISkyrimModGetter>> translatedLoadOrder,
                 ILinkCache translatedLinkCache)
             {
                 this.state = state;
                 this.settings = settings;
                 this.loadOrder = loadOrder;
                 this.linkCache = linkCache;
+                this.translatedLoadOrder = translatedLoadOrder;
                 this.translatedLinkCache = translatedLinkCache;
             }
 
@@ -512,8 +546,7 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                 where R : class, IMajorRecordGetter
                 where W : class, R, IMajorRecord
             {
-                linkCache.TryResolveSimpleContext(context.Record.FormKey, out IModContext<R>? originalContext, ResolveTarget.Origin);
-                if (originalContext == null)
+                if (!TryResolveContext(linkCache, context.Record, out IModContext<R>? originalContext, ResolveTarget.Origin))
                 {
                     return (null, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
                     {
@@ -524,13 +557,23 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                 }
                 if (settings.Translation.Plugins.Contains(originalContext.ModKey))
                 {
-                    translatedLinkCache.TryResolveSimpleContext(context.Record.FormKey, out originalContext, ResolveTarget.Winner);
+                    TryResolveContext(translatedLinkCache, context.Record, out originalContext, ResolveTarget.Winner);
                     var loopContext = originalContext;
                     while (loopContext is not null && settings.Translation.Plugins.Contains(loopContext.ModKey) && GetModStringsLookup(loopContext.ModKey).Empty)
                     {
                         if (!modLinkCaches.TryGetValue(loopContext.ModKey, out ILinkCache? modLinkCache))
                         {
-                            if (loadOrder.TryGetIfEnabledAndExists(loopContext.ModKey, out var mod))
+                            ISkyrimModGetter? mod;
+                            if (loadOrder.TryGetIfEnabledAndExists(loopContext.ModKey, out var mod1))
+                            {
+                                mod = mod1;
+                            }
+                            else
+                            {
+                                translatedLoadOrder.TryGetIfEnabledAndExists(loopContext.ModKey, out var mod2);
+                                mod = mod2;
+                            }
+                            if (mod is not null)
                             {
                                 var masters = new List<ModKey>();
                                 foreach (var masterMod in mod.MasterReferences)
@@ -548,7 +591,7 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                         }
                         else
                         {
-                            modLinkCache.TryResolveSimpleContext(context.Record.FormKey, out loopContext, ResolveTarget.Winner);
+                            TryResolveContext(modLinkCache, context.Record, out loopContext, ResolveTarget.Winner);
                         }
                     }
                     if (loopContext is null)
@@ -568,22 +611,39 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                     else
                     {
                         return (loopContext, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
-                        {
-                            if (value.TryLookup(GetModStringsLookup(loopContext.ModKey), language, out str))
-                            {
-                                return true;
-                            }
-                            str = null;
-                            return false;
-                        }
-                        );
+                            value.TryLookup(GetModStringsLookup(loopContext.ModKey), language, out str));
                     }
                 }
-                return (originalContext, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) => value.TryLookup(language, out str));
+                return (originalContext, (Lens<R, W>.Value value, Language language, [MaybeNullWhen(false)] out string str) =>
+                    value.TryLookup(language, out str));
             }
 
-            public IModContext<R>? GetTranslatedContext<R>(R majorRecordGetter) where R : class, IMajorRecordGetter =>
-                translatedLinkCache.TryResolveSimpleContext(majorRecordGetter.FormKey, out IModContext<R>? getter) ? getter : null;
+            private static bool TryResolveContext<R>(ILinkCache linkCache, R majorRecordGetter, [MaybeNullWhen(false)] out IModContext<R> result,
+                ResolveTarget target = ResolveTarget.Winner) where R : class, IMajorRecordGetter
+            {
+                if (TryResolveContextByFormKey(linkCache, majorRecordGetter, out result, target)) return true;
+                if (target != ResolveTarget.Winner) return false;
+                return TryResolveContextByEditorID(linkCache, majorRecordGetter, out result);
+            }
+
+            private static bool TryResolveContextByFormKey<R>(ILinkCache linkCache, R majorRecordGetter, [MaybeNullWhen(false)] out IModContext<R> result,
+                ResolveTarget target = ResolveTarget.Winner) where R : class, IMajorRecordGetter =>
+                linkCache.TryResolveSimpleContext(majorRecordGetter.FormKey, out result, target);
+
+            private static bool TryResolveContextByEditorID<R>(ILinkCache linkCache, R majorRecordGetter, [MaybeNullWhen(false)] out IModContext<R> result)
+                where R : class, IMajorRecordGetter
+            {
+                if (majorRecordGetter.EditorID is null)
+                {
+                    result = null;
+                    return false;
+                }
+                return linkCache.TryResolveSimpleContext(majorRecordGetter.EditorID, out result);
+            }
+
+
+            public bool TryGetTranslatedContext<R>(R majorRecordGetter, [MaybeNullWhen(false)] out IModContext<R> result) where R : class, IMajorRecordGetter =>
+                TryResolveContext(translatedLinkCache, majorRecordGetter, out result);
 
             private IModStringsLookup GetModStringsLookup(ModKey modKey)
             {
@@ -933,6 +993,48 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
             }
         }
 
+        private QuestObjectiveTextLens CreateQuestObjectiveTextLens()
+        {
+            return new QuestObjectiveTextLens(this);
+        }
+
+        private class QuestObjectiveTextLens : Lens<IQuestGetter, IQuest>
+        {
+            public QuestObjectiveTextLens(MergeTranslation parent) : base(parent)
+            {
+            }
+
+            public override IEnumerable<(string, Value)> ReadKeyValue(IQuestGetter majorRecordGetter)
+            {
+                foreach (IQuestObjectiveGetter questObjectiveGetter in majorRecordGetter.Objectives)
+                {
+                    if (questObjectiveGetter.DisplayText is not null)
+                    {
+                        string key = Utils.Key(majorRecordGetter, questObjectiveGetter);
+                        yield return (key, new Value.Translated(questObjectiveGetter.DisplayText, parent.settings));
+                    }
+                }
+            }
+
+            public override IEnumerable<(string, ValueSetter)> WriteKeyValue(IQuest majorRecord)
+            {
+                foreach (IQuestObjective questObjective in majorRecord.Objectives)
+                {
+                    string key = Utils.Key(majorRecord, questObjective);
+                    yield return (key, it =>
+                    {
+                        if (questObjective.DisplayText is not TranslatedString value)
+                        {
+                            value = new TranslatedString(TranslatedString.DefaultLanguage);
+                            questObjective.DisplayText = value;
+                        }
+                        value.Set(parent.settings.Translation.Language, it);
+                    }
+                    );
+                }
+            }
+        }
+
         private DialogResponseTextLens CreateDialogResponseTextLens()
         {
             return new DialogResponseTextLens(this);
@@ -963,6 +1065,82 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
             }
         }
 
+        private PerkEffectButtonLabelLens CreatePerkEffectButtonLabelLens()
+        {
+            return new PerkEffectButtonLabelLens(this);
+        }
+
+        private class PerkEffectButtonLabelLens : Lens<IPerkGetter, IPerk>
+        {
+            public PerkEffectButtonLabelLens(MergeTranslation parent) : base(parent)
+            {
+            }
+
+            public override IEnumerable<(string, Value)> ReadKeyValue(IPerkGetter majorRecordGetter)
+            {
+                int AddActivateCounter = 0, SetTextCounter = 0;
+                foreach (IAPerkEffectGetter perkEffectGetter in majorRecordGetter.Effects)
+                {
+                    if (perkEffectGetter is IPerkEntryPointAddActivateChoiceGetter perkEntryPointAddActivateChoiceGetter)
+                    {
+                        if (perkEntryPointAddActivateChoiceGetter.ButtonLabel is not null)
+                        {
+                            string key = Utils.Key(majorRecordGetter, perkEntryPointAddActivateChoiceGetter, AddActivateCounter);
+                            yield return (key, new Value.Translated(perkEntryPointAddActivateChoiceGetter.ButtonLabel, parent.settings));
+                        }
+                        AddActivateCounter++;
+                    }
+                    if (perkEffectGetter is IPerkEntryPointSetTextGetter perkEntryPointSetTextGetter)
+                    {
+                        string key = Utils.Key(majorRecordGetter, perkEntryPointSetTextGetter, SetTextCounter++);
+                        yield return (key, new Value.Translated(perkEntryPointSetTextGetter.Text, parent.settings));
+                    }
+                    // TODO (?) PerkEntryPointSelectText -> Text;
+                }
+            }
+
+            public override IEnumerable<(string, ValueSetter)> WriteKeyValue(IPerk majorRecord)
+            {
+                int AddActivateCounter = 0, SetTextCounter = 0;
+                foreach (IAPerkEffect perkEffect in majorRecord.Effects)
+                {
+                    if (perkEffect is IPerkEntryPointAddActivateChoice perkEntryPointAddActivateChoice)
+                    {
+                        if (perkEntryPointAddActivateChoice.ButtonLabel is not null)
+                        {
+                            string key = Utils.Key(majorRecord, perkEntryPointAddActivateChoice, AddActivateCounter);
+                            yield return (key, it =>
+                            {
+                                if (perkEntryPointAddActivateChoice.ButtonLabel is not TranslatedString value)
+                                {
+                                    value = new TranslatedString(TranslatedString.DefaultLanguage);
+                                    perkEntryPointAddActivateChoice.ButtonLabel = value;
+                                }
+                                value.Set(parent.settings.Translation.Language, it);
+                            }
+                            );
+                        }
+                        AddActivateCounter++;
+                    }
+                    if (perkEffect is IPerkEntryPointSetText perkEntryPointSetText)
+                    {
+                        string key = Utils.Key(majorRecord, perkEntryPointSetText, SetTextCounter++);
+                        yield return (key, it =>
+                        {
+                            if (perkEntryPointSetText.Text is not TranslatedString value)
+                            {
+                                value = new TranslatedString(TranslatedString.DefaultLanguage);
+                                perkEntryPointSetText.Text = value;
+                            }
+                            value.Set(parent.settings.Translation.Language, it);
+                        }
+                        );
+                    }
+                    // TODO (?) PerkEntryPointSelectText -> Text;
+                }
+            }
+        }
+
         private string ToUtf8(string str)
         {
             if (settings.Translation.Encoding == Encoding.none) return str;
@@ -979,6 +1157,8 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                 where R : class, IMajorRecordGetter
                 where W : class, R, IMajorRecord
         {
+            Dictionary<string, string> translatedValues;
+            HashSet<string> replacementValues;
             if (settings.Translation.Plugins.Contains(modContext.ModKey))
             {
                 translationContext.Statistics.AddTranslated(lenses.Select(lens => lens.ReadKeyValue(modContext.Record)
@@ -987,8 +1167,7 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                     .Count()).Sum());
                 return;
             }
-            var translatedContext = translationContext.GetTranslatedContext(modContext.Record);
-            if (translatedContext is null)
+            if (!translationContext.TryGetTranslatedContext(modContext.Record, out var translatedContext))
             {
                 translationContext.Statistics.AddUntranslated(modContext.ModKey, lenses.Select(lens => lens.ReadKeyValue(modContext.Record)
                     .Where(value => value.Item2 != null && value.Item2.TryLookup(settings.Translation.Language, out string? translatedValue)
@@ -996,14 +1175,14 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                     .Count()).Sum());
                 return;
             }
-            Dictionary<string, string> translatedValues = new();
+            translatedValues = new();
             foreach (var lens in lenses)
             {
                 foreach (var (key, value) in lens.ReadKeyValue(translatedContext.Record))
                 {
                     if (value != null && value.TryLookup(settings.Translation.Language, out string? translatedValue) && Regex.IsMatch(translatedValue, @"\w"))
                     {
-                        translatedValues.Add(key, translatedValue);
+                        translatedValues.Add(key.Replace($"{translatedContext.Record.FormKey}", $"{modContext.Record.FormKey}"), translatedValue);
                     }
                 }
             }
@@ -1018,7 +1197,7 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
             Lazy<Dictionary<string, (ModKey, string)>> originalValues = settings.Translation.ForceOverride
                 ? null!
                 : new(() => GetOriginalValues<R, W>(translationContext, modContext, lenses, settings.Translation.OriginalLanguage));
-            HashSet<string> replacementValues = new();
+            replacementValues = new();
             foreach (var lens in lenses)
             {
                 foreach (var (key, value) in lens.ReadKeyValue(modContext.Record))
@@ -1098,14 +1277,28 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
         private static string? CleanUpOriginalValue(string? value, Language language)
         {
             if (value is null) return value;
+            value = value.ToLower();
             if (language == Language.English)
             {
-                value = Regex.Replace(value, @"[^\w]an?([^\w]|$)", "$1");
-                value = Regex.Replace(value, @"[^\w]the([^\w]|$)", "$1");
-                value = Regex.Replace(value, @"e?s?[`']?e?s([^\w]|$)", "$1");
+                value = Regex.Replace(value, @"(\w)'m([^\w]|$)", "$1 am$2");
+                value = Regex.Replace(value, @"(\w)'re([^\w]|$)", "$1 are$2");
+                value = Regex.Replace(value, @"(\w)'ve([^\w]|$)", "$1 have$2");
+                value = Regex.Replace(value, @"(\w)'ll([^\w]|$)", "$1 will$2");
+                value = Regex.Replace(value, @"(^|[^\w])damn it([^\w]|$)", "$1dammit$2");
+                value = Regex.Replace(value, @"(^|[^\w])damnit([^\w]|$)", "$1dammit$2");
+                value = Regex.Replace(value, @"(^|[^\w])ah+([^\w]|$)", "$1ah$2");
+                value = Regex.Replace(value, @"(^|[^\w])'til([^\w]|$)", "$1till$2");
+                value = Regex.Replace(value, @"(^|[^\w])hm+([^\w]|$)", "$1hm$2");
+                value = Regex.Replace(value, @"(^|[^\w])u[hm]([^\w]|$)", "$1$2");
+                value = Regex.Replace(value, @"(^|[^\w])o[fh]([^\w]|$)", "$1$2");
+                value = Regex.Replace(value, @"(^|[^\w])an?([^\w]|$)", "$1$2");
+                value = Regex.Replace(value, @"(^|[^\w])the([^\w]|$)", "$1$2");
+                value = Regex.Replace(value, @"(\w)(e?s)?([`'](e?s)?)?([^\w]|$)", "$1$5");
+                value = Regex.Replace(value, @"(^|[^\w])(ha[^\w]?)+([^\w]|$)", "$1hah$3");
+                value = Regex.Replace(value, @"(^|[^\w])(he[^\w]?)+([^\w]|$)", "$1heh$3");
             }
-            value = Regex.Replace(value, @"[-.:,;!?\s]+", " ");
-            return value.ToLower();
+            value = Regex.Replace(value, @"[-.:,;!?'""\s]+", "");
+            return value;
         }
 
         private static Dictionary<string, (ModKey, string)> GetOriginalValues<R, W>(
@@ -1124,7 +1317,7 @@ Conflicted (translation can't be used, since the text was changed w.r.t. transla
                 {
                     foreach (var (key, value) in lens.ReadKeyValue(originalContext.Record))
                     {
-                        if (originalValueLookup(value, language, out string? originalValue))
+                        if (originalValueLookup(value, language, out string? originalValue) && Regex.IsMatch(originalValue, @"\w"))
                         {
                             values.Add(key, (originalContext.ModKey, originalValue));
                         }

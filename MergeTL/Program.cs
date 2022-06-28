@@ -4,7 +4,6 @@ using Mutagen.Bethesda.Synthesis;
 using Mutagen.Bethesda.Skyrim;
 using System.Threading.Tasks;
 using MergeTL.Tasks;
-using System.Runtime.InteropServices;
 
 namespace MergeTL
 {

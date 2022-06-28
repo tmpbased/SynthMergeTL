@@ -46,11 +46,17 @@ namespace MergeTL
         public static string Key(IQuestGetter questGetter, IQuestStageGetter questStageGetter, int i) =>
             $"{questGetter.FormKey}→Stage({questStageGetter.Index})→Log({i})→CNAM";
 
+        public static string Key(IQuestGetter questGetter, IQuestObjectiveGetter questObjectiveGetter) =>
+            $"{questGetter.FormKey}→Objective({questObjectiveGetter.Index})→NNAM";
+
         public static string Key(
             IMajorRecordGetter majorRecordGetter,
             IScriptEntryGetter scriptEntryGetter,
             IScriptStringPropertyGetter scriptStringPropertyGetter) =>
             $"{majorRecordGetter.FormKey}→Script({scriptEntryGetter.Name})→Property({scriptStringPropertyGetter.Name})";
+
+        public static string Key(IPerkGetter perkGetter, IAPerkEntryPointEffectGetter perkEntryPointEffect, int i) =>
+            $"{perkGetter.FormKey}→Effect({perkEntryPointEffect.EntryPoint}, {perkEntryPointEffect.Rank}, {perkEntryPointEffect.Priority}, {i})→EPF2";
 
         public static IEnumerable<(IScriptEntryGetter, IScriptStringPropertyGetter)> GetScriptStringProperties(IAVirtualMachineAdapterGetter? virtualMachineAdapterGetter)
         {
